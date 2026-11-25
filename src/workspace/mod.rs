@@ -20,6 +20,7 @@ mod session;
 mod settings_panel;
 mod tab_menu;
 mod tab_strip;
+mod tab_switcher;
 mod unsaved;
 mod word_complete;
 
@@ -71,6 +72,7 @@ use minimap::MinimapDrag;
 use preview::TogglePreview;
 use quick_open::QuickOpenState;
 use settings_panel::FontPickers;
+use tab_switcher::TabSwitcher;
 
 actions!(
     slate,
@@ -106,9 +108,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-s", SaveAs, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-w", CloseTab, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-shift-t", ReopenClosedTab, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-tab", NextTab, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-pagedown", NextTab, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-pageup", PreviousTab, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-q", Quit, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-z", ToggleWordWrap, Some(KEY_CONTEXT)),
@@ -124,6 +124,7 @@ pub fn init(cx: &mut App) {
     go_to_line::init(cx);
     quick_open::init(cx);
     find_in_files::init(cx);
+    tab_switcher::init(cx);
 }
 
 /// What to do once a buffer's unsaved changes have been saved or discarded.
@@ -139,6 +140,9 @@ pub struct Workspace {
     window: AnyWindowHandle,
     buffers: Vec<Buffer>,
     active: usize,
+    /// Open buffer IDs in most-recently-used order (newest at index 0).
+    mru: Vec<BufferId>,
+    tab_switcher: Option<TabSwitcher>,
     next_buffer_id: u64,
     storage: Storage,
     settings: Settings,
@@ -201,6 +205,8 @@ impl Workspace {
             window: window.window_handle(),
             buffers: Vec::new(),
             active: 0,
+            mru: Vec::new(),
+            tab_switcher: None,
             next_buffer_id: 0,
             settings,
             state: storage.load_state(),
@@ -282,8 +288,11 @@ impl Workspace {
         let Some(buffer) = self.buffers.get(index) else {
             return;
         };
+        let id = buffer.id;
+        let editor = buffer.editor.clone();
         self.active = index;
-        buffer.editor.update(cx, |state, cx| state.focus(window, cx));
+        self.touch_mru(id);
+        editor.update(cx, |state, cx| state.focus(window, cx));
         self.tab_scroll.scroll_to_item(index);
         self.sync_window_title(window);
         self.sync_find(window, cx);
@@ -299,6 +308,8 @@ impl Workspace {
             return;
         };
         let buffer = self.buffers.remove(index);
+        self.mru.retain(|existing| *existing != id);
+        self.tab_switcher = None;
         if let Some(path) = buffer.document.path() {
             self.closed_tabs.retain(|closed| closed != path);
             self.closed_tabs.push(path.to_path_buf());
@@ -433,6 +444,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::reopen_closed_tab))
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
+            .on_action(cx.listener(Self::next_tab_mru))
+            .on_action(cx.listener(Self::previous_tab_mru))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::toggle_whitespace))
             .on_action(cx.listener(Self::toggle_word_wrap))
@@ -472,5 +486,6 @@ impl Render for Workspace {
             .child(self.render_title_bar(window, cx))
             .child(div().flex_1().min_h_0().child(self.render_body(window, cx)))
             .child(self.render_status_bar(cx))
+            .children(self.render_tab_switcher(cx))
     }
 }

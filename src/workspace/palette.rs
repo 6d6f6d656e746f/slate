@@ -17,6 +17,7 @@ use super::minimap::ToggleMinimap;
 use super::preview::TogglePreview;
 use super::quick_open::QuickOpen;
 use super::tab_menu::{CopyPath, RevealInFileManager};
+use super::tab_switcher::{NextTabMru, PreviousTabMru};
 use super::{
     CloseTab, ReopenClosedTab, FindNext, FindPrevious, KEY_CONTEXT, NewFile, NextTab, Open, OpenFolder, OpenSettings, PreviousTab,
     Quit, Save, SaveAs, ToggleSidebar, ToggleWhitespace, ToggleWordWrap, Workspace,
@@ -132,6 +133,8 @@ static GROUPS: &[(&str, &[PaletteCommand])] = &[
             command("Reset Zoom", || Box::new(ResetZoom)).keywords(&["font"]),
             command("Next Tab", || Box::new(NextTab)),
             command("Previous Tab", || Box::new(PreviousTab)),
+            command("Next Recent Tab", || Box::new(NextTabMru)).keywords(&["mru", "switch", "tab"]),
+            command("Previous Recent Tab", || Box::new(PreviousTabMru)).keywords(&["mru", "switch", "tab"]),
         ],
     ),
     (

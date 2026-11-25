@@ -1,4 +1,5 @@
 mod breadcrumb;
+mod create;
 mod view;
 mod watcher;
 
@@ -34,6 +35,8 @@ pub struct Sidebar {
     tree: Option<FileTree>,
     show_hidden: bool,
     watcher: Option<DirWatcher>,
+    right_click_row: Option<(Point<Pixels>, RowKind)>,
+    pending_select: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -49,6 +52,8 @@ impl Sidebar {
             tree: None,
             show_hidden,
             watcher: None,
+            right_click_row: None,
+            pending_select: None,
             _subscriptions: subscriptions,
         }
     }
@@ -59,9 +64,16 @@ impl Sidebar {
 
     pub fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.tree = Some(FileTree::new(root.clone()));
-        self.watcher = DirWatcher::new(cx)
-            .inspect_err(|err| eprintln!("slate: file watching is off: {err}"))
-            .ok();
+        self.right_click_row = None;
+        self.pending_select = None;
+        // Tests don't start real inotify threads that would wake GPUI's deterministic scheduler.
+        self.watcher = if cfg!(test) {
+            None
+        } else {
+            DirWatcher::new(cx)
+                .inspect_err(|err| eprintln!("slate: file watching is off: {err}"))
+                .ok()
+        };
         self.refresh(cx);
         self.load_dir(root, cx);
     }
@@ -95,6 +107,8 @@ impl Sidebar {
     pub fn close_folder(&mut self, cx: &mut Context<Self>) {
         self.tree = None;
         self.watcher = None;
+        self.right_click_row = None;
+        self.pending_select = None;
         self.refresh(cx);
     }
 
@@ -167,13 +181,22 @@ impl Sidebar {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let show_hidden = self.show_hidden;
         let items = self.tree.as_mut().map(|tree| tree.items(show_hidden)).unwrap_or_default();
+        let pending = self.pending_select.clone();
+        let mut matched_pending = false;
         self.tree_state.update(cx, |state, cx| {
             let selected = state.selected_item().map(|item| item.id.clone());
             state.set_items(items, cx);
-            if let Some(ix) = selected.and_then(|id| state.index_of(&id)) {
+            if let Some(ix) = pending.as_ref().and_then(|id| state.index_of(id)) {
+                state.set_selected_index(Some(ix), cx);
+                state.scroll_to_item(ix, ScrollStrategy::Nearest);
+                matched_pending = true;
+            } else if let Some(ix) = selected.and_then(|id| state.index_of(&id)) {
                 state.set_selected_index(Some(ix), cx);
             }
         });
+        if matched_pending {
+            self.pending_select = None;
+        }
         cx.notify();
     }
 

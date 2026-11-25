@@ -10,6 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::breadcrumb::{Crumb, crumbs, display_path, home_dir};
+use super::create::CreateKind;
 use super::{Sidebar, SidebarEvent};
 use crate::file_tree::RowKind;
 
@@ -198,6 +199,7 @@ impl Sidebar {
 
             let content = h_flex()
                 .id(ElementId::Name(id.clone()))
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .gap_2()
@@ -210,32 +212,25 @@ impl Sidebar {
                         .text_color(theme.muted_foreground)
                 }))
                 .child(div().truncate().child(entry.item().label.clone()));
-            // Folders get "Open as Root" on right-click.
-            let content = match &kind {
-                Some(RowKind::Folder(dir)) => {
-                    let go = sidebar.clone();
-                    let dir = dir.clone();
-                    content
-                        .context_menu(move |menu, _, _| {
-                            let go = go.clone();
-                            let dir = dir.clone();
-                            menu.item(PopupMenuItem::new("Open as Root").on_click(move |_, _, cx| {
-                                let dir = dir.clone();
-                                _ = go.update(cx, |sidebar, cx| sidebar.navigate_to(dir, cx));
-                            }))
-                        })
-                        .into_any_element()
-                }
-                _ => content.into_any_element(),
-            };
 
             let open = sidebar.clone();
+            let record_row = sidebar.clone();
+            let row_kind_for_click = kind.clone();
             ListItem::new(ix)
                 .selected(selected)
                 .disabled(entry.is_disabled())
                 .pl(indent)
                 .py_0p5()
                 .child(content)
+                .when_some(row_kind_for_click, |item, row_kind| {
+                    item.on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                        let pos = event.position;
+                        let kind = row_kind.clone();
+                        _ = record_row.update(cx, |sidebar, _| {
+                            sidebar.right_click_row = Some((pos, kind));
+                        });
+                    })
+                })
                 .on_click(move |_, _, cx| {
                     if let Some(RowKind::File(path)) = &kind {
                         let path = path.clone();
@@ -249,17 +244,92 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
             .on_action(cx.listener(Self::open_selected))
-            .map(|this| {
+            .map(|root| {
                 if self.tree.is_some() {
-                    this.child(self.render_header(cx))
-                        .child(div().flex_1().min_h_0().py_1().child(self.render_tree(cx)))
+                    root.child(self.render_header(cx)).child(
+                        div()
+                            .id("sidebar-tree-wrap")
+                            .test_support()
+                            .flex_1()
+                            .min_h_0()
+                            .py_1()
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|sidebar, event: &MouseDownEvent, _, _| {
+                                    if !sidebar
+                                        .right_click_row
+                                        .as_ref()
+                                        .is_some_and(|(pos, _)| *pos == event.position)
+                                    {
+                                        sidebar.right_click_row = None;
+                                    }
+                                }),
+                            )
+                            .context_menu(move |menu, _, cx| {
+                                let Some(sidebar_entity) = this.upgrade() else {
+                                    return menu;
+                                };
+                                let (row, root_dir) = sidebar_entity.update(cx, |sidebar, _| {
+                                    (
+                                        sidebar.right_click_row.take().map(|(_, kind)| kind),
+                                        sidebar.root().map(Path::to_path_buf),
+                                    )
+                                });
+                                let (target_dir, folder_row) = match row {
+                                    Some(RowKind::Folder(dir)) => (Some(dir), true),
+                                    Some(RowKind::File(path)) => {
+                                        (path.parent().map(Path::to_path_buf).or(root_dir), false)
+                                    }
+                                    Some(RowKind::Placeholder) | None => (root_dir, false),
+                                };
+                                let Some(target_dir) = target_dir else {
+                                    return menu;
+                                };
+
+                                let new_file = this.clone();
+                                let new_file_dir = target_dir.clone();
+                                let new_folder = this.clone();
+                                let new_folder_dir = target_dir.clone();
+                                let menu = menu
+                                    .item(PopupMenuItem::new("New File…").on_click(
+                                        move |_, window, cx| {
+                                            let dir = new_file_dir.clone();
+                                            _ = new_file.update(cx, |sidebar, cx| {
+                                                sidebar.prompt_create(dir, CreateKind::File, window, cx)
+                                            });
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new("New Folder…").on_click(
+                                        move |_, window, cx| {
+                                            let dir = new_folder_dir.clone();
+                                            _ = new_folder.update(cx, |sidebar, cx| {
+                                                sidebar.prompt_create(dir, CreateKind::Folder, window, cx)
+                                            });
+                                        },
+                                    ));
+
+                                if folder_row {
+                                    let go = this.clone();
+                                    menu.separator().item(PopupMenuItem::new("Open as Root").on_click(
+                                        move |_, _, cx| {
+                                            let dir = target_dir.clone();
+                                            _ = go.update(cx, |sidebar, cx| sidebar.navigate_to(dir, cx));
+                                        },
+                                    ))
+                                } else {
+                                    menu
+                                }
+                            })
+                            .child(self.render_tree(cx)),
+                    )
                 } else {
-                    this.child(self.render_empty(cx))
+                    root.child(self.render_empty(cx))
                 }
             })
     }

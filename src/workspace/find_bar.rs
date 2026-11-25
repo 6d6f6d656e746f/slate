@@ -105,9 +105,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Escape closes the bar from the bar or the editor. Anything else gets the key.
+    /// Escape closes the switcher or find bar. Anything else gets the key.
     pub(super) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.find.open {
+        if self.tab_switcher.is_some() {
+            self.cancel_tab_switcher(window, cx);
+        } else if self.find.open {
             self.close_find(window, cx);
         } else {
             cx.propagate();

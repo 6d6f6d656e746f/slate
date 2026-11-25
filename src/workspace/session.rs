@@ -42,6 +42,7 @@ impl Workspace {
         if restored > 0 {
             // Restored tabs were pushed after the placeholder, in order.
             self.buffers.retain(|buffer| buffer.id != placeholder);
+            self.mru.retain(|id| *id != placeholder);
             self.activate(active, window, cx);
         }
         cx.notify();
