@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### 🗂️ Tabs
+
+- `Ctrl+Tab` and `Ctrl+Shift+Tab` now cycle through open tabs in most-recently-used order, showing a switcher overlay while `Ctrl` is held and switching when you release it. `Escape` cancels without leaving the current tab, and `Ctrl+PageDown` / `Ctrl+PageUp` still step through tabs in strip order
+
+### 📂 Sidebar
+
+- Right-click any folder, file, or empty space in the sidebar tree to create a new file or folder (`New File…` and `New Folder…`). Relative paths like `sub/file.rs` create missing parent folders, new files open right away in a tab, and empty, invalid, or duplicate names stay in the dialog with an inline error
+
 ## 1.1.0 - October 18, 2026
 
 ### ⌨️ Word completion
