@@ -12,16 +12,24 @@ use gpui_kit::*;
 use crate::file_tree::{self, FileTree, RowKind};
 use watcher::DirWatcher;
 
-actions!(sidebar, [OpenSelected]);
+actions!(sidebar, [OpenSelected, RenameSelected]);
 
 pub fn init(cx: &mut App) {
-    // Enter opens a selected file (or toggles a folder) in the file tree.
-    cx.bind_keys([KeyBinding::new("enter", OpenSelected, Some("Tree"))]);
+    // Enter opens a selected file (or toggles a folder) in the file tree; F2 renames it.
+    cx.bind_keys([
+        KeyBinding::new("enter", OpenSelected, Some("Tree")),
+        KeyBinding::new("f2", RenameSelected, Some("Tree")),
+    ]);
 }
 
 /// Events the workspace reacts to.
 pub enum SidebarEvent {
     OpenFile(PathBuf),
+    Renamed {
+        old_path: PathBuf,
+        new_path: PathBuf,
+        is_dir: bool,
+    },
     ShowHiddenChanged(bool),
     /// The user moved the sidebar to another folder from inside it.
     RootChanged,
@@ -216,6 +224,18 @@ impl Sidebar {
                 self.refresh(cx);
             }
             _ => {}
+        }
+    }
+
+    fn rename_selected(&mut self, _: &RenameSelected, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.tree_state.read(cx).selected_item().map(|item| item.id.clone()) else {
+            return;
+        };
+        let Some(kind) = self.row_kind(&id) else { return };
+        match kind {
+            RowKind::File(path) => self.prompt_rename(path, false, window, cx),
+            RowKind::Folder(dir) => self.prompt_rename(dir, true, window, cx),
+            RowKind::Placeholder => {}
         }
     }
 

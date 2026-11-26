@@ -94,6 +94,44 @@ impl FileTree {
         self.expanded.retain(|path| !path.starts_with(dir));
     }
 
+    /// Migrates cached subfolders and expanded state when a folder moves from `old` to `new`.
+    /// Returns the new paths of any loaded folders so their watches can be re-attached.
+    pub fn rename(&mut self, old: &Path, new: &Path) -> Vec<PathBuf> {
+        let moved_expanded: Vec<PathBuf> = self
+            .expanded
+            .iter()
+            .filter(|path| path.starts_with(old))
+            .cloned()
+            .collect();
+        for path in moved_expanded {
+            self.expanded.remove(&path);
+            if let Ok(rel) = path.strip_prefix(old) {
+                self.expanded.insert(new.join(rel));
+            }
+        }
+
+        let moved_keys: Vec<PathBuf> = self
+            .children
+            .keys()
+            .filter(|path| path.starts_with(old))
+            .cloned()
+            .collect();
+        let mut migrated = Vec::with_capacity(moved_keys.len());
+        for key in moved_keys {
+            let Some(mut nodes) = self.children.remove(&key) else { continue };
+            let Ok(rel_key) = key.strip_prefix(old) else { continue };
+            let new_key = new.join(rel_key);
+            for node in &mut nodes {
+                if let Ok(rel_node) = node.path.strip_prefix(old) {
+                    node.path = new.join(rel_node);
+                }
+            }
+            self.children.insert(new_key.clone(), nodes);
+            migrated.push(new_key);
+        }
+        migrated
+    }
+
     pub fn is_expanded(&self, dir: &Path) -> bool {
         self.expanded.contains(dir)
     }
@@ -216,5 +254,25 @@ mod tests {
         tree.forget(&dir.join("src"));
         assert!(!tree.is_loaded(&dir.join("src/inner")));
         assert!(!tree.is_expanded(&dir.join("src")));
+    }
+
+    #[test]
+    fn renaming_a_folder_migrates_loaded_subfolders_and_expansion() {
+        let dir = fixture("rename-tree");
+        let mut tree = FileTree::new(dir.clone());
+        let old = dir.join("src");
+        let new = dir.join("core");
+        tree.set_loaded(old.clone(), vec![Node { path: old.join("main.rs"), name: "main.rs".into(), is_dir: false }]);
+        tree.set_loaded(old.join("inner"), Vec::new());
+        tree.set_expanded(&old, true);
+        tree.set_expanded(&old.join("inner"), true);
+
+        let migrated = tree.rename(&old, &new);
+        assert_eq!(migrated.len(), 2);
+        assert!(!tree.is_loaded(&old));
+        assert!(tree.is_loaded(&new));
+        assert!(tree.is_loaded(&new.join("inner")));
+        assert!(tree.is_expanded(&new));
+        assert!(tree.is_expanded(&new.join("inner")));
     }
 }

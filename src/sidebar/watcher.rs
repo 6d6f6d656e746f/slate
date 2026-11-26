@@ -71,4 +71,16 @@ impl DirWatcher {
             let _ = self.watcher.unwatch(dir);
         }
     }
+
+    pub fn unwatch_prefix(&mut self, prefix: &std::path::Path) {
+        let gone: Vec<PathBuf> = self
+            .watched
+            .iter()
+            .filter(|dir| dir.starts_with(prefix))
+            .cloned()
+            .collect();
+        for dir in gone {
+            self.unwatch(&dir);
+        }
+    }
 }

@@ -142,6 +142,14 @@ impl Document {
         }
         self.saved_revision = revision;
     }
+
+    /// Updates the path and language after a file or parent folder is renamed,
+    /// preserving any unsaved edit state.
+    pub fn rename(&mut self, path: PathBuf) {
+        self.language = language::detect(&path);
+        self.path = Some(path);
+        self.title = None;
+    }
 }
 
 /// Reads a file as UTF-8 text. Binary files and other encodings are refused

@@ -273,6 +273,84 @@ impl Workspace {
             self.run_pending(action, window, cx);
         }
     }
+
+    /// Updates open tabs, recent files, tab colors, and watches after a sidebar rename.
+    pub(super) fn handle_renamed(
+        &mut self,
+        old_path: &std::path::Path,
+        new_path: &std::path::Path,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed_language_ids = Vec::new();
+        for buffer in &mut self.buffers {
+            let Some(current) = buffer.document.path() else { continue };
+            let Some(updated) = remap_path(current, old_path, new_path, is_dir) else { continue };
+            let language_before = buffer.document.language();
+            buffer.document.rename(updated);
+            let language = buffer.document.language();
+            if language != language_before {
+                buffer
+                    .editor
+                    .update(cx, |state, cx| state.set_highlighter(language.id, cx));
+                changed_language_ids.push(buffer.id);
+            }
+        }
+        for id in changed_language_ids {
+            self.text_changed(id, cx);
+        }
+
+        let mut state_changed = false;
+        for recent in &mut self.state.recent_files {
+            if let Some(updated) = remap_path(recent, old_path, new_path, is_dir) {
+                *recent = updated;
+                state_changed = true;
+            }
+        }
+        let moved_colors: Vec<PathBuf> = self
+            .state
+            .tab_colors
+            .keys()
+            .filter(|path| remap_path(path, old_path, new_path, is_dir).is_some())
+            .cloned()
+            .collect();
+        for key in moved_colors {
+            if let Some(color) = self.state.tab_colors.remove(&key)
+                && let Some(updated) = remap_path(&key, old_path, new_path, is_dir)
+            {
+                self.state.tab_colors.insert(updated, color);
+                state_changed = true;
+            }
+        }
+        if state_changed {
+            self.save_state();
+        }
+
+        for closed in &mut self.closed_tabs {
+            if let Some(updated) = remap_path(closed, old_path, new_path, is_dir) {
+                *closed = updated;
+            }
+        }
+
+        self.sync_window_title(window);
+        self.sync_file_watches();
+        self.schedule_session_save(cx);
+        cx.notify();
+    }
+}
+
+fn remap_path(
+    path: &std::path::Path,
+    old_path: &std::path::Path,
+    new_path: &std::path::Path,
+    is_dir: bool,
+) -> Option<PathBuf> {
+    if is_dir {
+        path.strip_prefix(old_path).ok().map(|rel| new_path.join(rel))
+    } else {
+        (path == old_path).then(|| new_path.to_path_buf())
+    }
 }
 
 pub(super) fn notify_error(message: String, window: &mut Window, cx: &mut App) {

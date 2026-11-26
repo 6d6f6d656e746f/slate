@@ -86,6 +86,11 @@ impl Workspace {
     ) {
         match event {
             SidebarEvent::OpenFile(path) => self.open_path(path.clone(), false, window, cx),
+            SidebarEvent::Renamed {
+                old_path,
+                new_path,
+                is_dir,
+            } => self.handle_renamed(old_path, new_path, *is_dir, window, cx),
             SidebarEvent::ShowHiddenChanged(show) => {
                 self.settings.show_hidden_files = *show;
                 self.save_settings();

@@ -24,6 +24,7 @@ pub(super) fn open_workspace(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowH
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::theme::init(storage.themes_dir(), cx);
+        crate::sidebar::init(cx);
         super::init(cx);
 
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(900.), px(600.)));

@@ -9,6 +9,7 @@
 ### 📂 Sidebar
 
 - Right-click any folder, file, or empty space in the sidebar tree to create a new file or folder (`New File…` and `New Folder…`). Relative paths like `sub/file.rs` create missing parent folders, new files open right away in a tab, and empty, invalid, or duplicate names stay in the dialog with an inline error
+- Right-click a file or folder and pick `Rename…` (or press `F2` in the tree) to rename or move it. Open tabs, syntax highlighting, recent files, and tab colors update automatically to the new path
 
 ## 1.1.0 - October 18, 2026
 

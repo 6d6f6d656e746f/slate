@@ -250,6 +250,7 @@ impl Render for Sidebar {
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
             .on_action(cx.listener(Self::open_selected))
+            .on_action(cx.listener(Self::rename_selected))
             .map(|root| {
                 if self.tree.is_some() {
                     root.child(self.render_header(cx)).child(
@@ -281,12 +282,14 @@ impl Render for Sidebar {
                                         sidebar.root().map(Path::to_path_buf),
                                     )
                                 });
-                                let (target_dir, folder_row) = match row {
-                                    Some(RowKind::Folder(dir)) => (Some(dir), true),
-                                    Some(RowKind::File(path)) => {
-                                        (path.parent().map(Path::to_path_buf).or(root_dir), false)
-                                    }
-                                    Some(RowKind::Placeholder) | None => (root_dir, false),
+                                let (target_dir, rename_target, folder_row) = match row {
+                                    Some(RowKind::Folder(dir)) => (Some(dir.clone()), Some((dir, true)), true),
+                                    Some(RowKind::File(path)) => (
+                                        path.parent().map(Path::to_path_buf).or(root_dir),
+                                        Some((path, false)),
+                                        false,
+                                    ),
+                                    Some(RowKind::Placeholder) | None => (root_dir, None, false),
                                 };
                                 let Some(target_dir) = target_dir else {
                                     return menu;
@@ -312,7 +315,18 @@ impl Render for Sidebar {
                                                 sidebar.prompt_create(dir, CreateKind::Folder, window, cx)
                                             });
                                         },
-                                    ));
+                                    ))
+                                    .when_some(rename_target, |menu, (path, is_dir)| {
+                                        let rename = this.clone();
+                                        menu.item(PopupMenuItem::new("Rename…").on_click(
+                                            move |_, window, cx| {
+                                                let path = path.clone();
+                                                _ = rename.update(cx, |sidebar, cx| {
+                                                    sidebar.prompt_rename(path, is_dir, window, cx)
+                                                });
+                                            },
+                                        ))
+                                    });
 
                                 if folder_row {
                                     let go = this.clone();

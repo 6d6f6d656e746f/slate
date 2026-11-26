@@ -290,3 +290,68 @@ fn sidebar_right_click_creates_files_and_folders(cx: &mut TestAppContext) {
     assert!(project.join("root.txt").is_file());
     assert_eq!(active_name(cx, &workspace), "root.txt");
 }
+
+#[gpui_kit::test]
+fn sidebar_right_click_renames_files_folders_and_open_tabs(cx: &mut TestAppContext) {
+    let dir = test_dir("sidebar-rename");
+    let project = dir.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(project.join("notes.txt"), "hello\n").unwrap();
+
+    let (handle, workspace) = open_workspace(cx, &dir);
+    open_file(cx, handle, &workspace, &project.join("src/main.rs"));
+    open_file(cx, handle, &workspace, &project.join("notes.txt"));
+    cx.update(|cx| workspace.update(cx, |workspace, cx| workspace.show_folder(project.clone(), cx)));
+    cx.run_until_parked();
+
+    // 1. Right-click file `notes.txt` -> Rename... (menu item 2); stem "notes" is selected.
+    let notes_id = FileTree::row_id(&project.join("notes.txt"));
+    right_click_menu_and_pick(cx, handle, gpui_kit::ElementId::Name(notes_id), None, 2);
+    assert!(dialog_open(cx, handle));
+    // Typing replaces the selected stem ("notes"), keeping ".txt", or type full name after backspace.
+    press(cx, handle, "backspace");
+    type_text(cx, handle, "readme");
+    press(cx, handle, "enter");
+    assert!(!dialog_open(cx, handle));
+    assert!(!project.join("notes.txt").exists());
+    assert!(project.join("readme.txt").is_file());
+    assert_eq!(active_name(cx, &workspace), "readme.txt");
+
+    // 2. Rename `readme.txt` -> `readme.md` using F2 while selected in tree, updating language.
+    cx.update_window(handle, |_, window, cx| {
+        let tree_state = workspace.read(cx).sidebar.read(cx).tree_state.clone();
+        tree_state.update(cx, |state, cx| state.focus(window, cx));
+        window.render_frame(cx);
+    })
+    .unwrap();
+    press(cx, handle, "f2");
+    assert!(dialog_open(cx, handle));
+    press(cx, handle, "ctrl-a");
+    type_text(cx, handle, "readme.md");
+    press(cx, handle, "enter");
+    assert!(!dialog_open(cx, handle));
+    assert!(project.join("readme.md").is_file());
+    cx.update(|cx| {
+        let ws = workspace.read(cx);
+        assert_eq!(ws.active_buffer().document.language().label, "Markdown");
+        assert!(ws.state.recent_files.contains(&project.join("readme.md")));
+    });
+
+    // 3. Right-click folder `src` -> Rename... (menu item 2) updates open tab path inside it.
+    let src_id = FileTree::row_id(&project.join("src"));
+    right_click_menu_and_pick(cx, handle, gpui_kit::ElementId::Name(src_id), None, 2);
+    assert!(dialog_open(cx, handle));
+    type_text(cx, handle, "core");
+    press(cx, handle, "enter");
+    assert!(!dialog_open(cx, handle));
+    assert!(!project.join("src").exists());
+    assert!(project.join("core/main.rs").is_file());
+    cx.update(|cx| {
+        let ws = workspace.read(cx);
+        assert_eq!(
+            ws.buffers[0].document.path(),
+            Some(project.join("core/main.rs").as_path())
+        );
+    });
+}

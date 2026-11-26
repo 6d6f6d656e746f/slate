@@ -35,6 +35,12 @@ impl CreateKind {
     }
 }
 
+#[derive(Debug, Clone)]
+enum NameDialogMode {
+    Create { parent_dir: PathBuf, kind: CreateKind },
+    Rename { old_path: PathBuf, is_dir: bool },
+}
+
 /// Validates a user-entered file or folder name relative to its target parent.
 /// Allows relative subpaths like `sub/file.rs`, while rejecting empty names,
 /// absolute paths, and `.` / `..` segments.
@@ -63,6 +69,14 @@ pub(crate) fn validate_entry_name(raw: &str) -> Result<PathBuf, &'static str> {
     Ok(clean)
 }
 
+fn set_dialog_error(error: &Entity<Option<SharedString>>, message: &'static str, window: &mut Window, cx: &mut App) {
+    error.update(cx, |err, cx| {
+        *err = Some(message.into());
+        cx.notify();
+    });
+    window.refresh();
+}
+
 impl Sidebar {
     pub(super) fn prompt_create(
         &mut self,
@@ -71,14 +85,79 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let location = self.relative_dir_label(&parent_dir);
+        self.open_name_dialog(
+            kind.title(),
+            location,
+            kind.placeholder(),
+            "Create",
+            None,
+            NameDialogMode::Create { parent_dir, kind },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn prompt_rename(
+        &mut self,
+        old_path: PathBuf,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(name) = old_path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        let parent_dir = old_path
+            .parent()
+            .map(Path::to_path_buf)
+            .or_else(|| self.root().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let location = self.relative_dir_label(&parent_dir);
+        let title = if is_dir { "Rename Folder" } else { "Rename File" };
+        self.open_name_dialog(
+            title,
+            location,
+            name.clone(),
+            "Rename",
+            Some((name, !is_dir)),
+            NameDialogMode::Rename { old_path, is_dir },
+            window,
+            cx,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_name_dialog(
+        &mut self,
+        title: &'static str,
+        location: String,
+        placeholder: impl Into<SharedString>,
+        confirm_label: &'static str,
+        initial: Option<(String, bool)>,
+        mode: NameDialogMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if window.has_active_dialog(cx) {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(kind.placeholder()));
+        let placeholder = placeholder.into();
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        if let Some((value, select_stem)) = initial {
+            input.update(cx, |state, cx| {
+                state.set_value(value.clone(), window, cx);
+                if select_stem && let Some(dot) = value.rfind('.').filter(|&i| i > 0) {
+                    state.set_selected_range(0..dot, cx);
+                } else {
+                    state.select_all(window, cx);
+                }
+            });
+        }
         let error: Entity<Option<SharedString>> = cx.new(|_| None);
 
         let clear_error = error.clone();
-        let parent_for_enter = parent_dir.clone();
+        let mode_for_enter = mode.clone();
         let input_for_enter = input.clone();
         let error_for_enter = error.clone();
         let subscription = cx.subscribe_in(&input, window, move |sidebar, _, event: &InputEvent, window, cx| {
@@ -92,7 +171,7 @@ impl Sidebar {
                     }
                 }
                 InputEvent::PressEnter { .. } => {
-                    if sidebar.confirm_create(&parent_for_enter, kind, &input_for_enter, &error_for_enter, window, cx) {
+                    if sidebar.confirm_name_dialog(&mode_for_enter, &input_for_enter, &error_for_enter, window, cx) {
                         window.close_dialog(cx);
                     }
                 }
@@ -100,12 +179,11 @@ impl Sidebar {
             }
         });
 
-        let location = self.relative_dir_label(&parent_dir);
         let this = cx.entity().downgrade();
         let input_for_dialog = input.clone();
         let input_for_ok = input.clone();
         let error_for_ok = error.clone();
-        let parent_for_ok = parent_dir.clone();
+        let mode_for_ok = mode;
 
         window.open_dialog(cx, move |dialog, _, _| {
             let _keep_sub = &subscription;
@@ -115,20 +193,20 @@ impl Sidebar {
             let this_btn = this.clone();
             let input_ok = input_for_ok.clone();
             let error_ok = error_for_ok.clone();
-            let parent_ok = parent_for_ok.clone();
+            let mode_ok = mode_for_ok.clone();
             let input_btn = input_for_ok.clone();
             let error_btn = error_for_ok.clone();
-            let parent_btn = parent_for_ok.clone();
+            let mode_btn = mode_for_ok.clone();
             let location = location.clone();
 
             dialog
                 .w(px(DIALOG_WIDTH))
                 .margin_top(px(72.))
-                .title(kind.title())
+                .title(title)
                 .on_ok(move |_, window, cx| {
                     this_ok
                         .update(cx, |sidebar, cx| {
-                            sidebar.confirm_create(&parent_ok, kind, &input_ok, &error_ok, window, cx)
+                            sidebar.confirm_name_dialog(&mode_ok, &input_ok, &error_ok, window, cx)
                         })
                         .unwrap_or(true)
                 })
@@ -144,7 +222,7 @@ impl Sidebar {
                                     .truncate()
                                     .child(location.clone()),
                             )
-                            .child(Input::new(&input).aria_label(kind.title()))
+                            .child(Input::new(&input).aria_label(title))
                             .when_some(message, |col, msg| {
                                 col.child(div().text_xs().text_color(cx.theme().danger).child(msg))
                             }),
@@ -156,19 +234,19 @@ impl Sidebar {
                         .gap_2()
                         .justify_end()
                         .child(
-                            Button::new("create-cancel")
+                            Button::new("entry-dialog-cancel")
                                 .outline()
                                 .label("Cancel")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
-                            Button::new("create-confirm")
+                            Button::new("entry-dialog-confirm")
                                 .primary()
-                                .label("Create")
+                                .label(confirm_label)
                                 .on_click(move |_, window, cx| {
                                     let close = this_btn
                                         .update(cx, |sidebar, cx| {
-                                            sidebar.confirm_create(&parent_btn, kind, &input_btn, &error_btn, window, cx)
+                                            sidebar.confirm_name_dialog(&mode_btn, &input_btn, &error_btn, window, cx)
                                         })
                                         .unwrap_or(true);
                                     if close {
@@ -201,10 +279,9 @@ impl Sidebar {
         }
     }
 
-    fn confirm_create(
+    fn confirm_name_dialog(
         &mut self,
-        parent_dir: &Path,
-        kind: CreateKind,
+        mode: &NameDialogMode,
         input: &Entity<InputState>,
         error: &Entity<Option<SharedString>>,
         window: &mut Window,
@@ -214,22 +291,33 @@ impl Sidebar {
         let rel = match validate_entry_name(&raw) {
             Ok(rel) => rel,
             Err(msg) => {
-                error.update(cx, |err, cx| {
-                    *err = Some(msg.into());
-                    cx.notify();
-                });
-                window.refresh();
+                set_dialog_error(error, msg, window, cx);
                 return false;
             }
         };
 
-        let target = parent_dir.join(&rel);
+        match mode {
+            NameDialogMode::Create { parent_dir, kind } => {
+                self.confirm_create(parent_dir, *kind, &rel, error, window, cx)
+            }
+            NameDialogMode::Rename { old_path, is_dir } => {
+                self.confirm_rename(old_path, *is_dir, &rel, error, window, cx)
+            }
+        }
+    }
+
+    fn confirm_create(
+        &mut self,
+        parent_dir: &Path,
+        kind: CreateKind,
+        rel: &Path,
+        error: &Entity<Option<SharedString>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let target = parent_dir.join(rel);
         if target.exists() {
-            error.update(cx, |err, cx| {
-                *err = Some("An item with that name already exists.".into());
-                cx.notify();
-            });
-            window.refresh();
+            set_dialog_error(error, "An item with that name already exists.", window, cx);
             return false;
         }
 
@@ -268,6 +356,58 @@ impl Sidebar {
         true
     }
 
+    fn confirm_rename(
+        &mut self,
+        old_path: &Path,
+        is_dir: bool,
+        rel: &Path,
+        error: &Entity<Option<SharedString>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(old_parent) = old_path.parent().map(Path::to_path_buf) else {
+            return true;
+        };
+        let target = old_parent.join(rel);
+        if target == old_path {
+            return true;
+        }
+        if is_dir && target.starts_with(old_path) {
+            set_dialog_error(error, "Cannot move a folder into itself.", window, cx);
+            return false;
+        }
+        if target.exists() {
+            set_dialog_error(error, "An item with that name already exists.", window, cx);
+            return false;
+        }
+
+        let old_bg = old_path.to_path_buf();
+        let new_bg = target.clone();
+        let rename = cx.background_spawn(async move {
+            if let Some(dir) = new_bg.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            fs::rename(&old_bg, &new_bg)
+        });
+
+        let old_owned = old_path.to_path_buf();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = rename.await;
+            _ = this.update_in(cx, |sidebar, window, cx| match result {
+                Ok(()) => sidebar.finish_rename(old_owned, target, is_dir, cx),
+                Err(err) => {
+                    window.push_notification(
+                        Notification::error(format!("Couldn't rename {}: {err}", old_owned.display())),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+
+        true
+    }
+
     fn finish_create(
         &mut self,
         parent_dir: PathBuf,
@@ -276,15 +416,61 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.pending_select = Some(FileTree::row_id(&target));
+        let stop_dir = match kind {
+            CreateKind::File => target.parent().unwrap_or(&parent_dir),
+            CreateKind::Folder => parent_dir.as_path(),
+        };
+        self.expand_and_load_ancestors(stop_dir, &parent_dir, cx);
 
-        // Expand the target's ancestor folders inside the tree so it becomes visible.
+        if kind == CreateKind::File {
+            cx.emit(SidebarEvent::OpenFile(target));
+        }
+    }
+
+    fn finish_rename(
+        &mut self,
+        old_path: PathBuf,
+        new_path: PathBuf,
+        is_dir: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_select = Some(FileTree::row_id(&new_path));
+
+        if is_dir {
+            if let Some(watcher) = self.watcher.as_mut() {
+                watcher.unwatch_prefix(&old_path);
+            }
+            if let Some(tree) = self.tree.as_mut() {
+                let migrated = tree.rename(&old_path, &new_path);
+                if let Some(watcher) = self.watcher.as_mut() {
+                    for dir in migrated {
+                        watcher.watch(&dir);
+                    }
+                }
+            }
+        }
+
+        if let Some(old_parent) = old_path.parent() {
+            self.load_dir(old_parent.to_path_buf(), cx);
+        }
+        if let Some(new_parent) = new_path.parent()
+            && Some(new_parent) != old_path.parent()
+        {
+            self.expand_and_load_ancestors(new_parent, new_parent, cx);
+        }
+
+        cx.emit(SidebarEvent::Renamed {
+            old_path,
+            new_path,
+            is_dir,
+        });
+    }
+
+    /// Expands folders from `stop_dir` up to `base_dir` (within tree root) and reloads them.
+    fn expand_and_load_ancestors(&mut self, stop_dir: &Path, base_dir: &Path, cx: &mut Context<Self>) {
         let mut dirs_to_load = Vec::new();
         if let Some(tree) = self.tree.as_mut() {
             let root = tree.root().to_path_buf();
-            let stop_dir = match kind {
-                CreateKind::File => target.parent().unwrap_or(&parent_dir),
-                CreateKind::Folder => parent_dir.as_path(),
-            };
             let mut cursor = Some(stop_dir);
             while let Some(dir) = cursor {
                 if !dir.starts_with(&root) {
@@ -294,21 +480,17 @@ impl Sidebar {
                     tree.set_expanded(dir, true);
                 }
                 dirs_to_load.push(dir.to_path_buf());
-                if dir == parent_dir || dir == root {
+                if dir == base_dir || dir == root {
                     break;
                 }
                 cursor = dir.parent();
             }
         }
-        if !dirs_to_load.contains(&parent_dir) {
-            dirs_to_load.push(parent_dir);
+        if !dirs_to_load.iter().any(|dir| dir == base_dir) {
+            dirs_to_load.push(base_dir.to_path_buf());
         }
         for dir in dirs_to_load {
             self.load_dir(dir, cx);
-        }
-
-        if kind == CreateKind::File {
-            cx.emit(SidebarEvent::OpenFile(target));
         }
     }
 }
